@@ -1,0 +1,246 @@
+//@version=6
+indicator("METODO FASE IV - Indicador", overlay = true)
+
+// --- Fase IV ---
+priceSource  = input.source(close, "Precio (source)")
+lenEMA10     = input.int(10,  "EMA10 (colorizada)")
+lenEMA30     = input.int(30,  "EMA30 (nube)")
+lenEMA60     = input.int(60,  "EMA60 (nube)")
+lwFast       = input.int(2,   "Grosor EMA10", minval=1)
+lwBorders    = input.int(2,   "Grosor bordes nube", minval=1)
+showCloud    = input.bool(true, "Mostrar nube 30/60")
+
+// --- DEMA ---
+enableDEMA   = input.bool(true, "Activar DEMA")
+demaLength   = input.int(14, minval=1, title="Longitud DEMA")
+
+// --- FILTRO AMPLITUD NUBE ---
+minCloudWidth = input.float(0.2, "Amplitud mínima nube (%)", minval=0.1, step=0.1, tooltip="Porcentaje mínimo de separación entre EMA30 y EMA60 respecto al precio")
+
+// =================== CALCULOS ===================
+
+// --- EMAs Fase IV ---
+ema10 = ta.ema(priceSource, lenEMA10)
+ema30 = ta.ema(priceSource, lenEMA30)
+ema60 = ta.ema(priceSource, lenEMA60)
+
+// --- Tendencia nube ---
+isUpTrend = ema30 > ema60
+
+// --- Amplitud de la nube ---
+cloudWidth = math.abs(ema30 - ema60)
+cloudWidthPercent = (cloudWidth / close) * 100
+hasWideCloud = cloudWidthPercent >= minCloudWidth
+
+// --- Colores ---
+clrUp   = color.rgb(0, 102, 204)
+clrDown = color.rgb(228, 0, 120)
+clrFlat = color.gray
+
+ema10Color = ema10 > ema10[1] ? clrUp : ema10 < ema10[1] ? clrDown : clrFlat
+bordeColor = isUpTrend ? clrUp : clrDown
+cloudColor = showCloud ? (isUpTrend ? color.new(clrUp, 85) : color.new(clrDown, 85)) : na
+
+// =================== PLOTS FASE IV ===================
+
+plot(ema10, title="EMA 10 (Colorizada)", color=ema10Color, linewidth=lwFast)
+
+pEMA30 = plot(ema30, title="EMA 30", color=bordeColor, linewidth=lwBorders)
+pEMA60 = plot(ema60, title="EMA 60", color=bordeColor, linewidth=lwBorders)
+
+fill(pEMA30, pEMA60, color=cloudColor)
+
+// =================== DEMA ===================
+
+src = close
+e1 = ta.ema(src, demaLength)
+e2 = ta.ema(e1, demaLength)
+dema = 2 * e1 - e2
+
+plot(enableDEMA ? dema : na, "DEMA", color=color.yellow, linewidth=3)
+
+// =================== LOGICA DEL INDICADOR ===================
+
+// Determinar si una vela es alcista o bajista
+isBullishCandle = close > open
+isBearishCandle = close < open
+
+// Determinar límites de la nube
+minCloud = math.min(ema30, ema60)
+maxCloud = math.max(ema30, ema60)
+
+// Determinar si el cierre está dentro de la nube
+isInsideCloud = close > minCloud and close < maxCloud
+
+// Determinar si el cierre toca o está dentro de la nube
+isTouchingOrInsideCloud = close >= minCloud and close <= maxCloud
+
+// Determinar si EMA10 está dentro de la nube
+isEma10InsideCloud = ema10 > minCloud and ema10 < maxCloud
+
+// Variables para rastrear condiciones ORIGINALES
+var int barsAfterRedCandle = 0
+var bool hadRedInCloud = false
+var bool invalidatedCall = false
+var bool greenCrossedEma10InCloud = false
+
+var int barsAfterGreenCandle = 0
+var bool hadGreenInCloud = false
+var bool invalidatedPut = false
+var bool redCrossedEma10InCloud = false
+
+// Variables para rastrear NUEVAS condiciones
+var bool hadRedCandlesInCloudCall = false
+var bool hadGreenCandlesInCloudPut = false
+
+// NUEVAS VARIABLES para controlar rupturas de nube
+var bool callNeedsGreenBreakout = false  // Requiere vela verde que rompa nube alcista
+var bool putNeedsRedBreakout = false     // Requiere vela roja que rompa nube bajista
+
+// ===== LOGICA CALL ORIGINAL =====
+// Detectar vela roja que cierra dentro o toca los bordes de nube alcista CON AMPLITUD SUFICIENTE y EMA10 fuera de la nube
+if isBearishCandle and isTouchingOrInsideCloud and isUpTrend and hasWideCloud and not isEma10InsideCloud and not callNeedsGreenBreakout
+    hadRedInCloud := true
+    barsAfterRedCandle := 0
+    invalidatedCall := false
+    greenCrossedEma10InCloud := false
+
+// Incrementar contador de barras después de la vela roja
+if hadRedInCloud and not invalidatedCall
+    barsAfterRedCandle += 1
+    
+    // Verificar si hay vela roja que cierra por debajo de la nube (invalida setup)
+    if isBearishCandle and close < minCloud
+        invalidatedCall := true
+        hadRedInCloud := false
+        greenCrossedEma10InCloud := false
+    
+    // Detectar si una vela verde cruza la EMA10 mientras está dentro de la nube
+    if isBullishCandle and isInsideCloud and close > ema10 and open < ema10
+        greenCrossedEma10InCloud := true
+        invalidatedCall := true
+        hadRedInCloud := false
+    
+    // NUEVA REGLA: Si la EMA10 entra dentro de la nube, invalidar setup
+    if isEma10InsideCloud
+        invalidatedCall := true
+        hadRedInCloud := false
+        greenCrossedEma10InCloud := false
+
+// NUEVA VALIDACIÓN: Detectar si vela roja rompe nube alcista (sale por abajo)
+if isUpTrend and hasWideCloud and isBearishCandle and open >= minCloud and close < minCloud
+    callNeedsGreenBreakout := true
+    hadRedCandlesInCloudCall := false
+
+// Resetear la bandera cuando vela verde rompe nube alcista (sale por arriba)
+if callNeedsGreenBreakout and isBullishCandle and open <= maxCloud and close > maxCloud
+    callNeedsGreenBreakout := false
+
+// Condición de entrada CALL ORIGINAL - EMA10 debe estar por encima de la nube Y NO dentro de la nube
+ema10AboveCloud = ema10 > maxCloud
+condicionCallOriginal = hadRedInCloud and not invalidatedCall and not greenCrossedEma10InCloud and isBullishCandle and close > ema10 and ema10AboveCloud and not isEma10InsideCloud and not callNeedsGreenBreakout
+
+if condicionCallOriginal
+    hadRedInCloud := false
+    invalidatedCall := false
+    greenCrossedEma10InCloud := false
+
+// ===== NUEVA LOGICA CALL =====
+// Detectar velas rojas cerrando dentro de nube alcista
+if isBearishCandle and isInsideCloud and isUpTrend and hasWideCloud and not callNeedsGreenBreakout
+    hadRedCandlesInCloudCall := true
+
+// Resetear si se invalida (vela roja cierra debajo de la nube)
+if hadRedCandlesInCloudCall and isBearishCandle and close < minCloud
+    hadRedCandlesInCloudCall := false
+    callNeedsGreenBreakout := true
+
+// Nueva señal CALL: vela verde rompe EMA10 dentro de nube Y rompe la nube hacia arriba
+condicionCallNueva = hadRedCandlesInCloudCall and isBullishCandle and open < ema10 and close > ema10 and open <= maxCloud and close > maxCloud and isUpTrend and hasWideCloud and not callNeedsGreenBreakout
+
+if condicionCallNueva
+    hadRedCandlesInCloudCall := false
+
+// CALL FINAL: combinar ambas condiciones
+condicionCall = condicionCallOriginal or condicionCallNueva
+
+// ===== LOGICA PUT ORIGINAL =====
+// Detectar vela verde que cierra dentro o toca los bordes de nube bajista CON AMPLITUD SUFICIENTE y EMA10 fuera de la nube
+if isBullishCandle and isTouchingOrInsideCloud and not isUpTrend and hasWideCloud and not isEma10InsideCloud and not putNeedsRedBreakout
+    hadGreenInCloud := true
+    barsAfterGreenCandle := 0
+    invalidatedPut := false
+    redCrossedEma10InCloud := false
+
+// Incrementar contador de barras después de la vela verde
+if hadGreenInCloud and not invalidatedPut
+    barsAfterGreenCandle += 1
+    
+    // Verificar si hay vela verde que cierra por encima de la nube (invalida setup)
+    if isBullishCandle and close > maxCloud
+        invalidatedPut := true
+        hadGreenInCloud := false
+        redCrossedEma10InCloud := false
+    
+    // Detectar si una vela roja cruza la EMA10 mientras está dentro de la nube
+    if isBearishCandle and isInsideCloud and close < ema10 and open > ema10
+        redCrossedEma10InCloud := true
+        invalidatedPut := true
+        hadGreenInCloud := false
+    
+    // NUEVA REGLA: Si la EMA10 entra dentro de la nube, invalidar setup
+    if isEma10InsideCloud
+        invalidatedPut := true
+        hadGreenInCloud := false
+        redCrossedEma10InCloud := false
+
+// NUEVA VALIDACIÓN: Detectar si vela verde rompe nube bajista (sale por arriba)
+if not isUpTrend and hasWideCloud and isBullishCandle and open <= maxCloud and close > maxCloud
+    putNeedsRedBreakout := true
+    hadGreenCandlesInCloudPut := false
+
+// Resetear la bandera cuando vela roja rompe nube bajista (sale por abajo)
+if putNeedsRedBreakout and isBearishCandle and open >= minCloud and close < minCloud
+    putNeedsRedBreakout := false
+
+// Condición de entrada PUT ORIGINAL - EMA10 debe estar por debajo de la nube Y NO dentro de la nube
+ema10BelowCloud = ema10 < minCloud
+condicionPutOriginal = hadGreenInCloud and not invalidatedPut and not redCrossedEma10InCloud and isBearishCandle and close < ema10 and ema10BelowCloud and not isEma10InsideCloud and not putNeedsRedBreakout
+
+if condicionPutOriginal
+    hadGreenInCloud := false
+    invalidatedPut := false
+    redCrossedEma10InCloud := false
+
+// ===== NUEVA LOGICA PUT =====
+// Detectar velas verdes cerrando dentro de nube bajista
+if isBullishCandle and isInsideCloud and not isUpTrend and hasWideCloud and not putNeedsRedBreakout
+    hadGreenCandlesInCloudPut := true
+
+// Resetear si se invalida (vela verde cierra arriba de la nube)
+if hadGreenCandlesInCloudPut and isBullishCandle and close > maxCloud
+    hadGreenCandlesInCloudPut := false
+    putNeedsRedBreakout := true
+
+// Nueva señal PUT: vela roja rompe EMA10 dentro de nube Y rompe la nube hacia abajo
+condicionPutNueva = hadGreenCandlesInCloudPut and isBearishCandle and open > ema10 and close < ema10 and open >= minCloud and close < minCloud and not isUpTrend and hasWideCloud and not putNeedsRedBreakout
+
+if condicionPutNueva
+    hadGreenCandlesInCloudPut := false
+
+// PUT FINAL: combinar ambas condiciones
+condicionPut = condicionPutOriginal or condicionPutNueva
+
+// =================== VISUALIZACION ===================
+
+// Marcar setups potenciales
+bgcolor(hadRedInCloud and not invalidatedCall ? color.new(color.green, 90) : na, title="Setup CALL activo")
+bgcolor(hadGreenInCloud and not invalidatedPut ? color.new(color.red, 90) : na, title="Setup PUT activo")
+
+// Señales de entrada
+plotshape(condicionCall, title="Señal CALL", location=location.belowbar, color=color.green, style=shape.triangleup, size=size.normal, text="CALL")
+plotshape(condicionPut, title="Señal PUT", location=location.abovebar, color=color.red, style=shape.triangledown, size=size.normal, text="PUT")
+
+// Alertas
+alertcondition(condicionCall, title="Alerta CALL", message="Señal CALL activada - Método Fase IV")
+alertcondition(condicionPut, title="Alerta PUT", message="Señal PUT activada - Método Fase IV")
