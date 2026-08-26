@@ -1,0 +1,59 @@
+//@version=5
+indicator("Fase IV - EMA10 + Nube EMA30/EMA30 Suavizada", overlay = true)
+
+//------------------------
+// Inputs
+//------------------------
+periodEMA8       = input.int(10,  "EMA 8 (rápida colorizada)")
+fastEMAPeriod    = input.int(30, "EMA rápida (18)")
+smoothEMAPeriod  = input.int(30, "Suavizado EMA rápida (18)", minval = 1)
+src              = input.source(close, "Fuente de precio")
+
+//------------------------
+// Cálculo de EMAs
+//------------------------
+ema8        = ta.ema(src, periodEMA8)             // EMA 8
+fastEMA     = ta.ema(src, fastEMAPeriod)          // EMA 18
+smoothedEMA = ta.ema(fastEMA, smoothEMAPeriod)    // EMA 18 suavizada con 18
+
+//------------------------
+// Colores y condiciones
+//------------------------
+clrUp   = color.rgb(0, 102, 204)     // Azul #0066CC
+clrDown = color.rgb(228, 0, 120)     // Fucsia #e40078
+clrFlat = color.gray
+
+isUpTrend    = fastEMA > smoothedEMA
+isUpEMA8     = ema8 > ema8[1]
+isDownEMA8   = ema8 < ema8[1]
+
+//------------------------
+// EMA 8 colorizada
+//------------------------
+ema8Color = isUpEMA8 ? clrUp : isDownEMA8 ? clrDown : clrFlat
+
+plot(ema8, 
+     title     = "EMA 8 (colorizada)", 
+     color     = ema8Color, 
+     linewidth = 2)
+
+//------------------------
+// EMA 18 + EMA18 suavizada
+//------------------------
+emaTrendColor = isUpTrend ? clrUp : clrDown
+
+pFast = plot(fastEMA, 
+     title     = "EMA 18", 
+     color     = emaTrendColor, 
+     linewidth = 2)
+
+pSmooth = plot(smoothedEMA, 
+     title     = "EMA 18 suavizada", 
+     color     = emaTrendColor, 
+     linewidth = 2)
+
+//------------------------
+// Nube entre EMA18 y EMA18 suavizada
+//------------------------
+fill(pFast, pSmooth, 
+     color = isUpTrend ? color.new(clrUp, 80) : color.new(clrDown, 80))
